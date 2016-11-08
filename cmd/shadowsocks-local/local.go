@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
+	ss "github.com/jiusanzhou/shadowsocks-go/shadowsocks"
 )
 
 var debug ss.DebugLog
@@ -162,6 +162,81 @@ var servers struct {
 	failCnt   []int // failed connection count
 }
 
+var srvCipherIsAlive map[int]bool = make(map[int]bool)
+var checkInterval time.Duration = 200 * time.Millisecond
+
+func checkAliveSrv(srvId int) {
+
+	// On the server side, we had add a command handle,
+	// so we just need to send the prebuild command,
+	// and wait for the result, for now, just the same as command.
+	// Only CheckAliveCmd suppored.
+
+	var srvCipher *ServerCipher = servers.srvCipher[srvId]
+
+	// Create ss conn
+	var err error
+	var conn net.Conn
+	var sconn *ss.Conn
+	var buf []byte = make([]byte, ss.CommandLength)
+
+	for {
+		// Sleep
+		time.Sleep(checkInterval)
+
+		conn, err = net.Dial("tcp", srvCipher.server)
+		if err != nil {
+			// this server is not alive
+			srvCipherIsAlive[srvId] = false
+			continue
+		}
+
+		sconn = ss.NewConn(conn, srvCipher.cipher.Copy())
+		if err != nil {
+			conn.Close()
+			// this server is not alive
+			srvCipherIsAlive[srvId] = false
+			continue
+		}
+
+		for {
+			// Send checkAliveCmd
+			if _, err = sconn.Write([]byte{byte(ss.CommandHeader),
+				byte(ss.CheckAliveCmd >> 8),
+				byte(ss.CheckAliveCmd)}); err != nil {
+				// this server is not alive
+				srvCipherIsAlive[srvId] = false
+				break
+			}
+
+			// Read response
+			if _, err = io.ReadFull(sconn, buf); err != nil {
+				// this server is not alive
+				srvCipherIsAlive[srvId] = false
+				break
+			}
+
+			// Check response content
+			if int(buf[0]) != ss.CommandHeader {
+				// this server is not alive
+				srvCipherIsAlive[srvId] = false
+				break
+			}
+
+			// Should check next 2 byte.
+
+			// this server maybe is fine.
+			srvCipherIsAlive[srvId] = true
+
+			// Sleep
+			time.Sleep(checkInterval)
+		}
+		// Close the conn
+		sconn.Close()
+	}
+
+}
+
 func parseServerConfig(config *ss.Config) {
 	hasPort := func(s string) bool {
 		_, port, err := net.SplitHostPort(s)
@@ -231,9 +306,9 @@ func parseServerConfig(config *ss.Config) {
 		}
 	}
 	servers.failCnt = make([]int, len(servers.srvCipher))
-	for _, se := range servers.srvCipher {
-		log.Println("available remote server", se.server)
-	}
+	// for _, se := range servers.srvCipher {
+	// 	log.Println("available remote server", se.server)
+	// }
 	return
 }
 
@@ -258,28 +333,52 @@ func connectToServer(serverId int, rawaddr []byte, addr string) (remote *ss.Conn
 // some probability according to its fail count, so we can discover recovered
 // servers.
 func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) {
-	const baseFailCnt = 20
-	n := len(servers.srvCipher)
-	skipped := make([]int, 0)
-	for i := 0; i < n; i++ {
-		// skip failed server, but try it with some probability
-		if servers.failCnt[i] > 0 && rand.Intn(servers.failCnt[i]+baseFailCnt) != 0 {
-			skipped = append(skipped, i)
-			continue
-		}
-		remote, err = connectToServer(i, rawaddr, addr)
-		if err == nil {
-			return
-		}
-	}
-	// last resort, try skipped servers, not likely to succeed
-	for _, i := range skipped {
-		remote, err = connectToServer(i, rawaddr, addr)
-		if err == nil {
-			return
+
+	// This is not a good to deal with this,
+	// Should use a goroutin to check server alive or not.
+	// I will change this code later.
+	// Note: this is for choosing a avialble server,
+	// before each request, the fastter the better.
+	// So a good way is rechecking, while request is coming,
+	// choosing the one witch's status is ok.
+	// MARKED
+
+	// Use a loop tp choose, but we cann't ramdom choose one.
+	for i, v := range srvCipherIsAlive {
+		if v {
+			remote, err = connectToServer(i, rawaddr, addr)
+			if err == nil {
+				return
+			}
 		}
 	}
 	return nil, err
+
+	// Next is the old code.
+	/*
+		const baseFailCnt = 20
+		n := len(servers.srvCipher)
+		skipped := make([]int, 0)
+		for i := 0; i < n; i++ {
+			// skip failed server, but try it with some probability
+			if servers.failCnt[i] > 0 && rand.Intn(servers.failCnt[i]+baseFailCnt) != 0 {
+				skipped = append(skipped, i)
+				continue
+			}
+			remote, err = connectToServer(i, rawaddr, addr)
+			if err == nil {
+				return
+			}
+		}
+		// last resort, try skipped servers, not likely to succeed
+		for _, i := range skipped {
+			remote, err = connectToServer(i, rawaddr, addr)
+			if err == nil {
+				return
+			}
+		}
+		return nil, err
+	*/
 }
 
 func handleConnection(conn net.Conn) {
@@ -337,6 +436,19 @@ func run(listenAddr string) {
 		log.Fatal(err)
 	}
 	log.Printf("starting local socks5 server at %v ...\n", listenAddr)
+
+	n := len(servers.srvCipher)
+	for i := 0; i < n; i++ {
+		go checkAliveSrv(i)
+	}
+
+	go func() {
+		for {
+			debug.Println("server status,", srvCipherIsAlive)
+			time.Sleep(1 * time.Second)
+		}
+	}()
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

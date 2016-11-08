@@ -1,12 +1,12 @@
 package shadowsocks
 
 import (
-	"errors"
-	"fmt"
-	"os"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"os"
 )
 
 func PrintVersion() {
@@ -58,3 +58,29 @@ func (flag *ClosedFlag) SetClosed() {
 func (flag *ClosedFlag) IsClosed() bool {
 	return flag.flag
 }
+
+// Normal request header:
+// 1(addrType) + 1(lenByte) + 256(max length address) + 2(port) + 10(hmac-sha1)
+// Add command type:
+// Defined command request length(3):
+// command_header(1) + command_type(2).
+// At now, command_header always be 0x80
+
+var (
+
+	// Least changing the orignal code, use error type to distingush if command.
+	CommandSignal = errors.New("Command Type")
+
+	CommandLength = 3
+
+	// Command header 1 byte,
+	// Response command, should also carry this header.
+	CommandHeader = 0x08
+
+	// Command type 2 byte, new only one command type
+	// 0x0101 for check if the proxy sever alive,
+	// BigEndian
+	// return 0x0103 also, like 0x080103 if is aviable,
+	// TODO: add more type to response.
+	CheckAliveCmd = 0x0103
+)

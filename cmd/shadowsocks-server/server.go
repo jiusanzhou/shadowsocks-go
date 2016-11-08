@@ -17,7 +17,7 @@ import (
 	"sync"
 	"syscall"
 
-	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
+	ss "github.com/jiusanzhou/shadowsocks-go/shadowsocks"
 )
 
 const (
@@ -45,6 +45,7 @@ func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 	// request size (when addrType is 3, domain name has at most 256 bytes)
 	// 1(addrType) + 1(lenByte) + 256(max length address) + 2(port) + 10(hmac-sha1)
 	buf := make([]byte, 270)
+
 	// read till we get possible domain length field
 	if _, err = io.ReadFull(conn, buf[:idType+1]); err != nil {
 		return
@@ -62,6 +63,9 @@ func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 			return
 		}
 		reqStart, reqEnd = idDm0, int(idDm0+buf[idDmLen]+lenDmBase)
+	case byte(ss.CommandHeader):
+		err = ss.CommandSignal
+		return
 	default:
 		err = fmt.Errorf("addr type %d not supported", addrType&ss.AddrMask)
 		return
@@ -102,6 +106,53 @@ func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 	return
 }
 
+func handleCommand(conn *ss.Conn, auth bool) (err error) {
+
+	// Hold this conn with death loop.
+
+	// 1 byte has be readed while connection building,
+	// hance, frist time we only have 2 bytes to read,
+	// after that, alway 3 bytes.
+
+	var fristTime bool = true
+
+	var buf []byte = make([]byte, 2)
+
+	for {
+		// If not has been connected,
+		// read 1 byte at frist, command header.
+		if !fristTime {
+			headerBuf := make([]byte, 1)
+			_, err = io.ReadFull(conn, headerBuf)
+			if err != nil {
+				debug.Println("Read header error, ", err.Error())
+				return
+			}
+			if int(headerBuf[0]) != ss.CommandHeader {
+				debug.Println("Not command header, ", headerBuf)
+				return
+			}
+		}
+		fristTime = false
+
+		// Read next 2 bytes
+		if _, err = io.ReadFull(conn, buf); err != nil {
+			debug.Println("Read next 2 bytes error")
+			return
+		}
+
+		switch binary.BigEndian.Uint16(buf) {
+		case uint16(ss.CheckAliveCmd):
+			debug.Println("Check alive ...")
+			rep := []byte{byte(ss.CommandHeader), byte(ss.CheckAliveCmd >> 8), byte(ss.CheckAliveCmd)}
+			_, err = conn.Write(rep)
+		default:
+			debug.Println("Unknow command ...")
+			return
+		}
+	}
+}
+
 const logCntDelta = 100
 
 var connCnt int
@@ -137,6 +188,21 @@ func handleConnection(conn *ss.Conn, auth bool) {
 
 	host, ota, err := getRequest(conn, auth)
 	if err != nil {
+		if err == ss.CommandSignal {
+			if debug {
+				debug.Println("received command ...")
+			}
+			if err := handleCommand(conn, auth); err != nil {
+				debug.Printf("response command error %s\n", err.Error())
+			}
+			// This shouldn't return, must death loop, for one command connection,
+			// But I has not time to add this logic, so just let the connection gone.
+			// for {
+			//		// receive command
+			// 		// send result
+			// }
+			return
+		}
 		log.Println("error getting request", conn.RemoteAddr(), conn.LocalAddr(), err)
 		return
 	}
