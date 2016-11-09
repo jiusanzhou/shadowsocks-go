@@ -187,9 +187,12 @@ func checkAliveSrv(srvId int) {
 	var sconn *ss.Conn
 	var buf []byte = make([]byte, ss.CommandLength)
 
+	ticker := time.Tick(ss.CheckInterval)
+
 	for {
 		// Sleep
-		time.Sleep(ss.CheckInterval)
+		<-ticker
+		// time.Sleep(ss.CheckInterval)
 
 		conn, err = net.Dial("tcp", srvCipher.server)
 		if err != nil {
@@ -237,7 +240,8 @@ func checkAliveSrv(srvId int) {
 			srvCipherIsAlive[srvId] = true
 
 			// Sleep
-			time.Sleep(ss.CheckInterval)
+			<-ticker
+			// time.Sleep(ss.CheckInterval)
 		}
 		// Close the conn
 		sconn.Close()
@@ -321,7 +325,6 @@ func parseServerConfig(config *ss.Config) {
 }
 
 func connectToServer(serverId int, rawaddr []byte, addr string) (remote *ss.Conn, err error) {
-	log.Println("Id, ", serverId)
 	se := servers.srvCipher[serverId]
 	remote, err = ss.DialWithRawAddr(rawaddr, se.server, se.cipher.Copy())
 	if err != nil {
