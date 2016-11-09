@@ -166,13 +166,20 @@ var srvCipherIsAlive map[int]bool = make(map[int]bool)
 var aliveSrvIds []int = []int{}
 
 func checkAliveSrv(srvId int) {
-
 	// On the server side, we had add a command handle,
 	// so we just need to send the prebuild command,
 	// and wait for the result, for now, just the same as command.
 	// Only CheckAliveCmd suppored.
 
+	log.Println("ID:", srvId)
+
 	var srvCipher *ServerCipher = servers.srvCipher[srvId]
+
+	defer func() {
+		if err := recover(); err != nil {
+			debug.Println("Recovered in -> ", srvCipher.server, err)
+		}
+	}()
 
 	// Create ss conn
 	var err error
@@ -210,6 +217,7 @@ func checkAliveSrv(srvId int) {
 			}
 
 			// Read response
+			sconn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 			if _, err = io.ReadFull(sconn, buf); err != nil {
 				// this server is not alive
 				srvCipherIsAlive[srvId] = false
@@ -220,7 +228,7 @@ func checkAliveSrv(srvId int) {
 			if int(buf[0]) != ss.CommandHeader {
 				// this server is not alive
 				srvCipherIsAlive[srvId] = false
-				break
+				continue
 			}
 
 			// Should check next 2 byte.
@@ -313,6 +321,7 @@ func parseServerConfig(config *ss.Config) {
 }
 
 func connectToServer(serverId int, rawaddr []byte, addr string) (remote *ss.Conn, err error) {
+	log.Println("Id, ", serverId)
 	se := servers.srvCipher[serverId]
 	remote, err = ss.DialWithRawAddr(rawaddr, se.server, se.cipher.Copy())
 	if err != nil {
@@ -344,6 +353,7 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 	// MARKED
 
 	// Use a loop to choose, but we cann't ramdom choose one.
+	// stupid way to choose a conn
 	alives := make([]int, len(servers.srvCipher))
 	for i, v := range srvCipherIsAlive {
 		if v {
@@ -351,7 +361,11 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 		}
 	}
 
-	remote, err = connectToServer(rand.Intn(len(alives)), rawaddr, addr)
+	// This is a stupid way, the length maybe changed while `rand,`
+	// will panic
+
+	remote, err = connectToServer(alives[rand.Intn(len(alives))], rawaddr, addr)
+
 	if err == nil {
 		return
 	} else {
@@ -466,6 +480,7 @@ func run(listenAddr string) {
 
 	go func() {
 		for {
+			debug.Println(srvCipherIsAlive)
 			for i, v := range srvCipherIsAlive {
 				var s string
 				if v {
