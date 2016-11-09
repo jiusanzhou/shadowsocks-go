@@ -159,19 +159,20 @@ type ServerCipher struct {
 
 var servers struct {
 	srvCipher []*ServerCipher
-	failCnt   []int // failed connection count
+	failCnt   []int  // failed connection count
+	status    []bool // Server status
 }
 
-var srvCipherIsAlive map[int]bool = make(map[int]bool)
-var aliveSrvIds []int = []int{}
+var serversLength int
+
+// var srvCipherIsAlive map[int]bool = make(map[int]bool)
+// var aliveSrvIds []int = []int{}
 
 func checkAliveSrv(srvId int) {
 	// On the server side, we had add a command handle,
 	// so we just need to send the prebuild command,
 	// and wait for the result, for now, just the same as command.
 	// Only CheckAliveCmd suppored.
-
-	log.Println("ID:", srvId)
 
 	var srvCipher *ServerCipher = servers.srvCipher[srvId]
 
@@ -197,7 +198,7 @@ func checkAliveSrv(srvId int) {
 		conn, err = net.Dial("tcp", srvCipher.server)
 		if err != nil {
 			// this server is not alive
-			srvCipherIsAlive[srvId] = false
+			servers.status[srvId] = false
 			continue
 		}
 
@@ -205,7 +206,7 @@ func checkAliveSrv(srvId int) {
 		if err != nil {
 			conn.Close()
 			// this server is not alive
-			srvCipherIsAlive[srvId] = false
+			servers.status[srvId] = false
 			continue
 		}
 
@@ -215,7 +216,7 @@ func checkAliveSrv(srvId int) {
 				byte(ss.CheckAliveCmd >> 8),
 				byte(ss.CheckAliveCmd)}); err != nil {
 				// this server is not alive
-				srvCipherIsAlive[srvId] = false
+				servers.status[srvId] = false
 				break
 			}
 
@@ -223,21 +224,21 @@ func checkAliveSrv(srvId int) {
 			sconn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
 			if _, err = io.ReadFull(sconn, buf); err != nil {
 				// this server is not alive
-				srvCipherIsAlive[srvId] = false
+				servers.status[srvId] = false
 				break
 			}
 
 			// Check response content
 			if int(buf[0]) != ss.CommandHeader {
 				// this server is not alive
-				srvCipherIsAlive[srvId] = false
+				servers.status[srvId] = false
 				continue
 			}
 
 			// Should check next 2 byte.
 
 			// this server maybe is fine.
-			srvCipherIsAlive[srvId] = true
+			servers.status[srvId] = true
 
 			// Sleep
 			<-ticker
@@ -317,7 +318,10 @@ func parseServerConfig(config *ss.Config) {
 			i++
 		}
 	}
-	servers.failCnt = make([]int, len(servers.srvCipher))
+	serversLength = len(servers.srvCipher)
+	servers.failCnt = make([]int, serversLength)
+	servers.status = make([]bool, serversLength)
+
 	// for _, se := range servers.srvCipher {
 	// 	log.Println("available remote server", se.server)
 	// }
@@ -357,8 +361,8 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 
 	// Use a loop to choose, but we cann't ramdom choose one.
 	// stupid way to choose a conn
-	alives := make([]int, len(servers.srvCipher))
-	for i, v := range srvCipherIsAlive {
+	alives := make([]int, serversLength)
+	for i, v := range servers.status {
 		if v {
 			alives = append(alives, i)
 		}
@@ -372,7 +376,7 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 	if err == nil {
 		return
 	} else {
-		for i, v := range srvCipherIsAlive {
+		for i, v := range servers.status {
 			if v {
 				remote, err = connectToServer(i, rawaddr, addr)
 				if err == nil {
@@ -443,7 +447,7 @@ func handleConnection(conn net.Conn) {
 
 	remote, err := createServerConn(rawaddr, addr)
 	if err != nil {
-		if len(servers.srvCipher) > 1 {
+		if serversLength > 1 {
 			log.Println("Failed connect to all avaiable shadowsocks server")
 		}
 		return
@@ -467,8 +471,7 @@ func run(listenAddr string) {
 	}
 	log.Printf("starting local socks5 server at %v ...\n", listenAddr)
 
-	n := len(servers.srvCipher)
-	for i := 0; i < n; i++ {
+	for i := 0; i < serversLength; i++ {
 		go checkAliveSrv(i)
 	}
 
@@ -482,18 +485,19 @@ func run(listenAddr string) {
 	// }()
 
 	go func() {
+		var s string
+		ticker := time.Tick(time.Second)
 		for {
-			debug.Println(srvCipherIsAlive)
-			for i, v := range srvCipherIsAlive {
-				var s string
+			debug.Println(servers.status)
+			for i, v := range servers.status {
 				if v {
 					s = "ok"
 				} else {
 					s = "error"
 				}
-				debug.Println(servers.srvCipher[i].server, "is", s, "...")
+				debug.Println(servers.srvCipher[i].server, "is", s)
 			}
-			time.Sleep(1 * time.Second)
+			<-ticker
 		}
 	}()
 
