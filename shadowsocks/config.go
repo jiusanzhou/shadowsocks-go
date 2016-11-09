@@ -35,9 +35,13 @@ type Config struct {
 	// The order of servers in the client config is significant, so use array
 	// instead of map to preserve the order.
 	ServerPassword [][]string `json:"server_password"`
+
+	// Check server alive interval
+	CheckInterval int `json:"check_interval"`
 }
 
 var readTimeout time.Duration
+var CheckInterval time.Duration
 
 func (config *Config) GetServerArray() []string {
 	// Specifying multiple servers in the "server" options is deprecated.
@@ -87,6 +91,11 @@ func ParseConfig(path string) (config *Config, err error) {
 		return nil, err
 	}
 	readTimeout = time.Duration(config.Timeout) * time.Second
+	if config.CheckInterval <= 0 {
+		CheckInterval = 200 * time.Millisecond
+	} else {
+		CheckInterval = time.Duration(config.CheckInterval) * time.Millisecond
+	}
 	if strings.HasSuffix(strings.ToLower(config.Method), "-auth") {
 		config.Method = config.Method[:len(config.Method)-5]
 		config.Auth = true

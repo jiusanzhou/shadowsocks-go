@@ -163,7 +163,7 @@ var servers struct {
 }
 
 var srvCipherIsAlive map[int]bool = make(map[int]bool)
-var checkInterval time.Duration = 200 * time.Millisecond
+var aliveSrvIds []int = []int{}
 
 func checkAliveSrv(srvId int) {
 
@@ -182,7 +182,7 @@ func checkAliveSrv(srvId int) {
 
 	for {
 		// Sleep
-		time.Sleep(checkInterval)
+		time.Sleep(ss.CheckInterval)
 
 		conn, err = net.Dial("tcp", srvCipher.server)
 		if err != nil {
@@ -229,7 +229,7 @@ func checkAliveSrv(srvId int) {
 			srvCipherIsAlive[srvId] = true
 
 			// Sleep
-			time.Sleep(checkInterval)
+			time.Sleep(ss.CheckInterval)
 		}
 		// Close the conn
 		sconn.Close()
@@ -343,15 +343,28 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 	// choosing the one witch's status is ok.
 	// MARKED
 
-	// Use a loop tp choose, but we cann't ramdom choose one.
+	// Use a loop to choose, but we cann't ramdom choose one.
+	alives := make([]int, len(servers.srvCipher))
 	for i, v := range srvCipherIsAlive {
 		if v {
-			remote, err = connectToServer(i, rawaddr, addr)
-			if err == nil {
-				return
+			alives = append(alives, i)
+		}
+	}
+
+	remote, err = connectToServer(rand.Intn(len(alives)), rawaddr, addr)
+	if err == nil {
+		return
+	} else {
+		for i, v := range srvCipherIsAlive {
+			if v {
+				remote, err = connectToServer(i, rawaddr, addr)
+				if err == nil {
+					return
+				}
 			}
 		}
 	}
+
 	return nil, err
 
 	// Next is the old code.
@@ -442,9 +455,26 @@ func run(listenAddr string) {
 		go checkAliveSrv(i)
 	}
 
+	// update alive srv to array
+	// go func() {
+	// 	for i, v := range srvCipherIsAlive {
+	// 		if v {
+
+	// 		}
+	// 	}
+	// }()
+
 	go func() {
 		for {
-			debug.Println("server status,", srvCipherIsAlive)
+			for i, v := range srvCipherIsAlive {
+				var s string
+				if v {
+					s = "ok"
+				} else {
+					s = "error"
+				}
+				debug.Println(servers.srvCipher[i].server, "is", s, "...")
+			}
 			time.Sleep(1 * time.Second)
 		}
 	}()
